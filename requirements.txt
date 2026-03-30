@@ -1,0 +1,13 @@
+torch>=2.1.0
+transformers>=4.40.0
+peft>=0.10.0
+accelerate>=0.28.0
+deepspeed>=0.14.0
+tensorboard>=2.16.0
+pillow>=10.0.0
+numpy>=1.24.0
+tqdm>=4.65.0
+sentencepiece>=0.1.99
+protobuf>=3.20.0
+# wandb>=0.16.0  # 可选: WandB 日志
+# flash-attn>=2.5.0  # 可选: Flash Attention 2

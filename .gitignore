@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Training outputs
+outputs/
+wandb/
+*.pt
+*.bin
+*.safetensors
+
+# Data (too large for git)
+data/pretrain/images/
+data/sft/images/
+data/dpo/images/
+*.zip
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

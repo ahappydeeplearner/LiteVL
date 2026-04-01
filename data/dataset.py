@@ -15,7 +15,7 @@ import os
 import json
 import copy
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from typing import Dict, List, Optional, Any
 from PIL import Image
 from transformers import SiglipImageProcessor
@@ -365,8 +365,13 @@ def collate_fn_dpo(batch: List[Dict]) -> Dict[str, torch.Tensor]:
 
 
 def build_dataloader(dataset: Dataset, batch_size: int, shuffle: bool = True,
-                     num_workers: int = 4, collate_fn=None) -> DataLoader:
+                     num_workers: int = 4, collate_fn=None, distributed: bool = False) -> DataLoader:
     """构建 DataLoader"""
+    sampler = None
+    if distributed:
+        sampler = DistributedSampler(dataset, shuffle=shuffle)
+        shuffle = False  # sampler 负责 shuffle
+
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -375,4 +380,5 @@ def build_dataloader(dataset: Dataset, batch_size: int, shuffle: bool = True,
         pin_memory=True,
         collate_fn=collate_fn,
         drop_last=True,
+        sampler=sampler,
     )

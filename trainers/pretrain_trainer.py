@@ -9,6 +9,7 @@ import os
 import torch
 import torch.nn as nn
 from torch.cuda.amp import autocast, GradScaler
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from utils.logger import TrainLogger, MetricsTracker
 from utils.train_utils import (
@@ -17,20 +18,32 @@ from utils.train_utils import (
 
 
 class PretrainTrainer:
-    def __init__(self, model, train_dataloader, config, logger: TrainLogger):
-        self.model = model
-        self.train_dataloader = train_dataloader
+    def __init__(self, model, train_dataloader, config, logger: TrainLogger, local_rank: int = -1):
         self.config = config
+        self.train_dataloader = train_dataloader
         self.logger = logger
         self.metrics = MetricsTracker(window_size=100)
+        self.local_rank = local_rank
+        self.is_main = (local_rank <= 0)
 
         # 设备
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model.to(self.device)
+        if local_rank >= 0:
+            self.device = torch.device(f"cuda:{local_rank}")
+        else:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(self.device)
+
+        # DDP 包装
+        if local_rank >= 0:
+            self.model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+        else:
+            self.model = model
+        # 保留原始模型引用，用于保存和获取 projector 参数
+        self.raw_model = model
 
         # 优化器 - 只优化 projector 参数
         self.optimizer = torch.optim.AdamW(
-            [p for p in model.projector.parameters() if p.requires_grad],
+            [p for p in self.raw_model.projector.parameters() if p.requires_grad],
             lr=config.learning_rate,
             weight_decay=config.weight_decay,
         )
@@ -54,17 +67,18 @@ class PretrainTrainer:
 
     def train(self):
         """执行预训练"""
-        self.logger.log_info("=" * 60)
-        self.logger.log_info("Stage 1: 预训练 - 特征对齐")
-        self.logger.log_info(f"GPU: {get_gpu_info()}")
-        self.logger.log_model_info(self.model)
-        self.logger.log_gpu_memory()
-        self.logger.log_info("=" * 60)
+        if self.is_main:
+            self.logger.log_info("=" * 60)
+            self.logger.log_info("Stage 1: 预训练 - 特征对齐")
+            self.logger.log_info(f"GPU: {get_gpu_info()}")
+            self.logger.log_model_info(self.raw_model)
+            self.logger.log_gpu_memory()
+            self.logger.log_info("=" * 60)
 
         self.model.train()
         # 但 vision encoder 和 LLM 保持 eval 模式
-        self.model.vision_encoder.eval()
-        self.model.llm.eval()
+        self.raw_model.vision_encoder.eval()
+        self.raw_model.llm.eval()
 
         for epoch in range(self.config.num_epochs):
             self.logger.epoch = epoch
@@ -81,7 +95,7 @@ class PretrainTrainer:
                 if (step + 1) % self.config.gradient_accumulation_steps == 0:
                     if self.config.max_grad_norm > 0:
                         torch.nn.utils.clip_grad_norm_(
-                            self.model.projector.parameters(),
+                            self.raw_model.projector.parameters(),
                             self.config.max_grad_norm,
                         )
                     self.optimizer.step()
@@ -90,7 +104,7 @@ class PretrainTrainer:
                     self.global_step += 1
 
                     # 日志
-                    if self.global_step % self.config.logging_steps == 0:
+                    if self.global_step % self.config.logging_steps == 0 and self.is_main:
                         self.logger.log_metrics({
                             "train/loss": self.metrics.get_smoothed("loss"),
                             "train/lr": self.scheduler.get_last_lr()[0],
@@ -98,22 +112,24 @@ class PretrainTrainer:
                         }, step=self.global_step)
 
                     # 保存 checkpoint
-                    if self.global_step % self.config.save_steps == 0:
+                    if self.global_step % self.config.save_steps == 0 and self.is_main:
                         save_checkpoint(
                             self.model, self.optimizer, self.scheduler,
                             self.global_step, epoch, self.config.output_dir,
                         )
 
             # Epoch 结束
-            self.logger.log_epoch_summary(epoch, {
-                "loss": epoch_metrics.get_global_avg("loss"),
-            })
-            self.logger.log_gpu_memory()
+            if self.is_main:
+                self.logger.log_epoch_summary(epoch, {
+                    "loss": epoch_metrics.get_global_avg("loss"),
+                })
+                self.logger.log_gpu_memory()
 
         # 保存最终模型
-        final_dir = os.path.join(self.config.output_dir, "final")
-        self.model.save_pretrained(final_dir)
-        self.logger.log_info(f"预训练完成! 模型已保存到 {final_dir}")
+        if self.is_main:
+            final_dir = os.path.join(self.config.output_dir, "final")
+            self.raw_model.save_pretrained(final_dir)
+            self.logger.log_info(f"预训练完成! 模型已保存到 {final_dir}")
 
     def _train_step(self, batch) -> float:
         """单步训练"""

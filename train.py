@@ -13,6 +13,7 @@ import sys
 import argparse
 
 import torch
+import torch.distributed as dist
 
 from configs.base_config import ModelConfig, DataConfig, PretrainConfig, SFTConfig, DPOConfig
 from models.litevl import LiteVL
@@ -28,33 +29,49 @@ from utils.logger import TrainLogger
 from utils.train_utils import set_seed, get_gpu_info
 
 
+def setup_distributed():
+    """初始化分布式训练环境"""
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    if local_rank == -1:
+        return -1
+    dist.init_process_group(backend="nccl")
+    torch.cuda.set_device(local_rank)
+    return local_rank
+
+
 def run_pretrain(model_config: ModelConfig, data_config: DataConfig,
-                 train_config: PretrainConfig):
+                 train_config: PretrainConfig, local_rank: int = -1):
     """Stage 1: 预训练 - 特征对齐"""
+    is_main = (local_rank <= 0)
     logger = TrainLogger(
         output_dir=train_config.output_dir,
         stage_name="Stage1_Pretrain",
-        use_tensorboard=True,
+        use_tensorboard=is_main,
     )
 
     set_seed(train_config.seed)
-    logger.log_info(f"GPU 信息: {get_gpu_info()}")
+    if is_main:
+        logger.log_info(f"GPU 信息: {get_gpu_info()}")
 
     # 构建模型
-    logger.log_info("正在加载模型...")
+    if is_main:
+        logger.log_info("正在加载模型...")
     model = LiteVL(model_config)
     model.setup_for_stage("pretrain")
-    logger.log_model_info(model)
+    if is_main:
+        logger.log_model_info(model)
 
     # 保存配置
-    logger.log_config({
-        "model": model_config.__dict__,
-        "data": data_config.__dict__,
-        "train": train_config.__dict__,
-    })
+    if is_main:
+        logger.log_config({
+            "model": model_config.__dict__,
+            "data": data_config.__dict__,
+            "train": train_config.__dict__,
+        })
 
     # 构建数据集
-    logger.log_info("正在加载预训练数据...")
+    if is_main:
+        logger.log_info("正在加载预训练数据...")
     dataset = PretrainDataset(
         data_path=data_config.pretrain_data_path,
         image_dir=data_config.pretrain_image_dir,
@@ -67,10 +84,11 @@ def run_pretrain(model_config: ModelConfig, data_config: DataConfig,
         batch_size=train_config.batch_size,
         num_workers=data_config.num_workers,
         collate_fn=collate_fn_pretrain,
+        distributed=(local_rank >= 0),
     )
 
     # 训练
-    trainer = PretrainTrainer(model, dataloader, train_config, logger)
+    trainer = PretrainTrainer(model, dataloader, train_config, logger, local_rank=local_rank)
     trainer.train()
     logger.close()
 
@@ -191,7 +209,12 @@ def main():
                         help="自定义配置文件路径 (JSON)")
     parser.add_argument("--pretrain_ckpt", type=str, default=None,
                         help="Stage 1 checkpoint 路径 (用于 Stage 2)")
+    parser.add_argument("--local_rank", type=int, default=-1,
+                        help="DeepSpeed 分布式训练自动传入的 local rank")
     args = parser.parse_args()
+
+    # 初始化分布式
+    local_rank = setup_distributed()
 
     # 加载配置
     model_config = ModelConfig()
@@ -207,24 +230,32 @@ def main():
         for k, v in custom.get("data", {}).items():
             setattr(data_config, k, v)
 
-    print("\n" + "=" * 60)
-    print("  LiteVL - 低成本视觉语言模型训练框架")
-    print("  架构: SigLIP + MLP Projector + Qwen2")
-    print("=" * 60 + "\n")
+    if local_rank <= 0:
+        print("\n" + "=" * 60)
+        print("  LiteVL - 低成本视觉语言模型训练框架")
+        print("  架构: SigLIP + MLP Projector + Qwen2")
+        print("=" * 60 + "\n")
 
     if args.stage in ("pretrain", "all"):
-        print("[1/3] Stage 1: 预训练 - 特征对齐")
-        run_pretrain(model_config, data_config, PretrainConfig())
+        if local_rank <= 0:
+            print("[1/3] Stage 1: 预训练 - 特征对齐")
+        run_pretrain(model_config, data_config, PretrainConfig(), local_rank=local_rank)
 
     if args.stage in ("sft", "all"):
-        print("[2/3] Stage 2: SFT - 指令微调")
+        if local_rank <= 0:
+            print("[2/3] Stage 2: SFT - 指令微调")
         run_sft(model_config, data_config, SFTConfig(), args.pretrain_ckpt)
 
     if args.stage in ("dpo", "all"):
-        print("[3/3] Stage 3: DPO - 偏好对齐")
+        if local_rank <= 0:
+            print("[3/3] Stage 3: DPO - 偏好对齐")
         run_dpo(model_config, data_config, DPOConfig())
 
-    print("\n训练完成!")
+    if local_rank <= 0:
+        print("\n训练完成!")
+
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

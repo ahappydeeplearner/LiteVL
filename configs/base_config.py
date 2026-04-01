@@ -10,7 +10,7 @@ from typing import Optional, List
 class ModelConfig:
     """模型架构配置"""
     # Vision Encoder
-    vision_encoder_name: str = "google/siglip-so400m-patch14-384"
+    vision_encoder_name: str = "models/siglip-so400m-patch14-384"
     vision_hidden_size: int = 1152
     image_size: int = 384
     patch_size: int = 14
@@ -21,7 +21,7 @@ class ModelConfig:
     projector_hidden_size: int = 4096
 
     # LLM Backbone
-    llm_name: str = "Qwen/Qwen2-0.5B-Instruct"
+    llm_name: str = "models/Qwen2-0.5B-Instruct"
     llm_hidden_size: int = 896
     max_length: int = 2048
 
@@ -40,7 +40,7 @@ class ModelConfig:
 class DataConfig:
     """数据配置"""
     # Stage 1: 预训练数据 (特征对齐)
-    pretrain_data_path: str = "data/pretrain/llava_pretrain_lcs558k.json"
+    pretrain_data_path: str = "data/pretrain/blip_laion_cc_sbu_558k.json"
     pretrain_image_dir: str = "data/pretrain/images"
 
     # Stage 2: SFT数据 (指令微调)
@@ -61,8 +61,8 @@ class PretrainConfig:
     """Stage 1: 预训练 - 特征对齐"""
     output_dir: str = "outputs/stage1_pretrain"
     num_epochs: int = 1
-    batch_size: int = 32
-    gradient_accumulation_steps: int = 1
+    batch_size: int = 1
+    gradient_accumulation_steps: int = 32
     learning_rate: float = 1e-3
     weight_decay: float = 0.0
     warmup_ratio: float = 0.03
@@ -72,7 +72,7 @@ class PretrainConfig:
     bf16: bool = True
     deepspeed_config: Optional[str] = None
     logging_steps: int = 10
-    save_steps: int = 500
+    save_steps: int = 200
     seed: int = 42
 
 

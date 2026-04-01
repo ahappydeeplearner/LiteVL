@@ -66,8 +66,9 @@ def save_checkpoint(model, optimizer, scheduler, step: int, epoch: int,
     ckpt_dir = os.path.join(output_dir, "checkpoints", f"step_{step}")
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    # 保存模型
-    model.save_pretrained(ckpt_dir)
+    # 保存模型 (DDP 包装时需要取 .module)
+    raw_model = model.module if hasattr(model, "module") else model
+    raw_model.save_pretrained(ckpt_dir)
 
     # 保存训练状态
     train_state = {

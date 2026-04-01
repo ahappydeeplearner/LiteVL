@@ -47,8 +47,15 @@ def load_model(model_path: str, device: str = "cuda"):
 
 
 def chat(model: LiteVL, image_path: str, question: str,
-         max_new_tokens: int = 512, temperature: float = 0.7):
-    """单轮对话推理"""
+         max_new_tokens: int = 512, temperature: float = 0.7,
+         prompt_style: str = "chat"):
+    """
+    单轮对话推理
+
+    Args:
+        prompt_style: "chat" 使用 ChatML 对话格式 (适用于 SFT/DPO 模型),
+                      "pretrain" 使用简单描述格式 (适用于 Stage 1 预训练模型)
+    """
     device = next(model.parameters()).device
 
     # 处理图像
@@ -58,10 +65,13 @@ def chat(model: LiteVL, image_path: str, question: str,
         images=image, return_tensors="pt"
     ).pixel_values.to(device)
 
-    # 构建对话
-    prompt = (f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
-              f"<|im_start|>user\n{question}<|im_end|>\n"
-              f"<|im_start|>assistant\n")
+    # 根据模型阶段构建不同的 prompt
+    if prompt_style == "pretrain":
+        prompt = f"{question}\n"
+    else:
+        prompt = (f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+                  f"<|im_start|>user\n{question}<|im_end|>\n"
+                  f"<|im_start|>assistant\n")
 
     input_ids = model.tokenizer(prompt, return_tensors="pt").input_ids.to(device)
     # 在开头插入图像 token
@@ -93,6 +103,9 @@ def main():
                         help="问题")
     parser.add_argument("--max_tokens", type=int, default=512)
     parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--prompt_style", type=str, default="chat",
+                        choices=["chat", "pretrain"],
+                        help="prompt 格式: chat (SFT/DPO模型) 或 pretrain (Stage1模型)")
     args = parser.parse_args()
 
     print("正在加载模型...")
@@ -100,7 +113,7 @@ def main():
     print("模型加载完成!")
 
     response = chat(model, args.image, args.question,
-                    args.max_tokens, args.temperature)
+                    args.max_tokens, args.temperature, args.prompt_style)
     print(f"\nQ: {args.question}")
     print(f"A: {response}")
 

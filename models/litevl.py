@@ -52,7 +52,7 @@ class LiteVL(nn.Module):
 
         # 3. LLM Backbone (Qwen2)
         llm_kwargs = dict(
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             trust_remote_code=True,
         )
         try:
@@ -90,6 +90,8 @@ class LiteVL(nn.Module):
             # 冻结 LLM
             for param in self.llm.parameters():
                 param.requires_grad = False
+            # 启用 gradient checkpointing 以节省显存
+            self.llm.gradient_checkpointing_enable()
             # 只训练 projector
             for param in self.projector.parameters():
                 param.requires_grad = True

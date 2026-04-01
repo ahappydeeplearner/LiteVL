@@ -1,6 +1,6 @@
 # LiteVL
 
-A lightweight vision-language model training framework based on the LLaVA architecture. Trains a complete VLM on a single A100-80GB GPU in approximately 12 GPU-hours across three stages.
+A lightweight vision-language model training framework based on the LLaVA architecture.
 
 ## Architecture
 
@@ -9,16 +9,20 @@ SigLIP-SO400M (Vision Encoder, frozen) --> MLP Projector --> Qwen2-0.5B (LLM)
 ```
 
 - **Vision Encoder**: SigLIP-SO400M-patch14-384, outputs 729 visual tokens per image, always frozen
-- **MLP Projector**: 2-layer MLP (1152-dim -> 896-dim) with GELU activation, ~10M parameters
+- **MLP Projector**: 2-layer MLP (1152-dim -> 896-dim) with GELU activation
 - **LLM**: Qwen2-0.5B-Instruct, frozen in Stage 1, LoRA fine-tuned in Stages 2 & 3
 
 ## Three-Stage Training Pipeline
 
-| Stage | Task | Trainable Params | Data | GPU Hours |
-|-------|------|-----------------|------|-----------|
-| Stage 1 - Pretrain | Feature alignment | Projector (~10M) | LCS-558K image-caption pairs | ~2h |
-| Stage 2 - SFT | Instruction fine-tuning | Projector + LoRA (~50M) | LLaVA-mix-665K conversations | ~8h |
-| Stage 3 - DPO | Preference alignment | Projector + LoRA | RLHF-V preference pairs | ~2h |
+| Stage | Task | Trainable Params | Data |
+|-------|------|-----------------|------|
+| Stage 1 - Pretrain | Feature alignment | Projector (~1.8M) | LCS-558K image-caption pairs |
+| Stage 2 - SFT | Instruction fine-tuning | Projector + LoRA (~50M) | LLaVA-mix-665K conversations |
+| Stage 3 - DPO | Preference alignment | Projector + LoRA (~50M) | RLHF-V preference pairs |
+
+- **Stage 1**: 训练 MLP Projector 将视觉特征映射到 LLM 嵌入空间，Vision Encoder 和 LLM 均冻结
+- **Stage 2**: 使用 LoRA 微调 LLM + Projector，赋予模型多轮对话和指令遵循能力
+- **Stage 3**: 通过 DPO 算法进行偏好对齐，减少幻觉，提升回复质量
 
 ## Quick Start
 
@@ -67,11 +71,11 @@ bash scripts/run_sft.sh        # Stage 2
 bash scripts/run_dpo.sh        # Stage 3
 ```
 
-Multi-GPU distributed training with DeepSpeed:
+Multi-GPU distributed training:
 
 ```bash
 bash scripts/run_distributed.sh <stage> <num_gpus>
-# e.g. bash scripts/run_distributed.sh sft 4
+# e.g. bash scripts/run_distributed.sh pretrain 8
 ```
 
 You can also use the CLI directly:
@@ -86,16 +90,28 @@ python train.py --stage sft --config my_config.json  # custom config override
 
 ### 4. Inference
 
+Stage 1 pretrain model (caption-style prompt):
+
+```bash
+python inference.py \
+    --model_path outputs/stage1_pretrain/final \
+    --image photo.jpg \
+    --question "Describe this image." \
+    --prompt_style pretrain
+```
+
+Stage 2/3 SFT/DPO model (ChatML dialog format, default):
+
 ```bash
 python inference.py \
     --model_path outputs/stage3_dpo/final \
     --image photo.jpg \
-    --question "Describe this image."
+    --question "Describe this image in detail."
 ```
 
 ## Single-File Version
 
-`LiteVL.py` is a self-contained monolithic version of the entire framework. It supports all training stages plus:
+`LiteVL.py` is a self-contained monolithic version of the entire framework:
 
 ```bash
 python LiteVL.py --stage dummy   # generate test data
@@ -137,10 +153,10 @@ LiteVL/
 Configurations are defined as dataclasses in `configs/base_config.py`:
 
 - **ModelConfig**: Model paths, projector type, LoRA settings (rank=64, alpha=16)
-- **DataConfig**: Dataset paths, image size (384), max sequence length
-- **PretrainConfig**: lr=1e-3, batch_size=32, cosine schedule
-- **SFTConfig**: lr=2e-5, batch_size=16, gradient_accumulation=2
-- **DPOConfig**: lr=5e-7, beta=0.1, gradient_accumulation=4
+- **DataConfig**: Dataset paths, image size (384), max sequence length (2048)
+- **PretrainConfig**: lr=1e-3, batch_size=1, gradient_accumulation=32, cosine schedule, bf16
+- **SFTConfig**: lr=2e-5, batch_size=16, gradient_accumulation=2, bf16
+- **DPOConfig**: lr=5e-7, beta=0.1, batch_size=8, gradient_accumulation=4, bf16
 
 Override any config via a JSON file with `--config`:
 
@@ -155,4 +171,4 @@ python train.py --stage sft --config '{"learning_rate": 1e-5, "num_epochs": 2}'
 - Transformers >= 4.40.0
 - PEFT >= 0.10.0
 - DeepSpeed >= 0.14.0
-- 1x NVIDIA A100-80GB (or equivalent) for single-GPU training
+- NVIDIA GPU with sufficient VRAM (A100-80GB recommended for multi-GPU training)

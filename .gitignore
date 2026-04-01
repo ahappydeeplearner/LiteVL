@@ -31,3 +31,13 @@ Thumbs.db
 
 # Logs
 *.log
+
+data/dpo
+data/sft
+data/pretrain
+
+
+
+models/Qwen2-0.5B-Instruct
+models/Qwen2.5-0.5B-Instruct
+models/siglip-so400m-patch14-384
